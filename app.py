@@ -16,7 +16,7 @@ from functools import wraps
 
 app = Flask(__name__, static_folder='../public', static_url_path='')
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threaded')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # 数据库路径
 DB_PATH = os.path.join(os.path.dirname(__file__), 'ceyi_quant.db')
