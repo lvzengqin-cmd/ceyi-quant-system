@@ -1,8 +1,8 @@
 """
 策奕量化 - 后端服务
-Flask + SQLite + WebSocket实时通信
+Flask + SQLite + WebSocket实时通信 + Excel导出
 """
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import sqlite3
@@ -11,8 +11,16 @@ import os
 import random
 import threading
 import time
-from datetime import datetime
+import io
+from datetime import datetime, timedelta
 from functools import wraps
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    EXCEL_AVAILABLE = True
+except ImportError:
+    EXCEL_AVAILABLE = False
 
 app = Flask(__name__, static_folder='../public', static_url_path='')
 CORS(app)
@@ -273,6 +281,11 @@ def get_stats():
     user = request.current_user
     today = datetime.now().strftime('%Y-%m-%d')
     
+    # 支持自定义日期范围筛选
+    date = request.args.get('date', '')
+    start_date = request.args.get('startDate', '')
+    end_date = request.args.get('endDate', '')
+    
     conn = get_db_connection()
     
     base_sql = "SELECT * FROM trades WHERE 1=1"
@@ -281,44 +294,85 @@ def get_stats():
         base_sql += " AND user_id = ?"
         params.append(user['id'])
     
-    # 今日数据
-    today_sql = base_sql + " AND date = ?"
-    today_trades = conn.execute(today_sql, params + [today]).fetchall()
+    # 根据筛选条件确定统计范围
+    if date:
+        # 单日统计
+        filter_sql = base_sql + " AND date = ?"
+        filter_params = params + [date]
+    elif start_date and end_date:
+        # 区间统计
+        filter_sql = base_sql + " AND date >= ? AND date <= ?"
+        filter_params = params + [start_date, end_date]
+    else:
+        # 今日统计（默认）
+        filter_sql = base_sql + " AND date = ?"
+        filter_params = params + [today]
     
-    today_orders = len(today_trades)
-    today_long = len([t for t in today_trades if t['direction'] == 'long'])
-    today_short = len([t for t in today_trades if t['direction'] == 'short'])
+    filtered_trades = conn.execute(filter_sql, filter_params).fetchall()
     
-    # 胜率统计
+    # 基础统计
+    total_orders = len(filtered_trades)
+    long_count = len([t for t in filtered_trades if t['direction'] == 'long'])
+    short_count = len([t for t in filtered_trades if t['direction'] == 'short'])
+    
+    # 已结算订单统计（用于胜率计算）
     settled_sql = base_sql + " AND status != 'pending'"
-    settled = conn.execute(settled_sql, params).fetchall()
+    settled_params = params.copy()
+    
+    if date:
+        settled_sql += " AND date = ?"
+        settled_params.append(date)
+    elif start_date and end_date:
+        settled_sql += " AND date >= ? AND date <= ?"
+        settled_params.extend([start_date, end_date])
+    
+    settled = conn.execute(settled_sql, settled_params).fetchall()
     win_count = len([t for t in settled if t['status'] == 'win'])
+    lose_count = len([t for t in settled if t['status'] == 'lose'])
     win_rate = (win_count / len(settled) * 100) if settled else 0
     
-    today_profit = sum([t['profit'] or 0 for t in today_trades if t['profit'] is not None])
-    total_profit = sum([t['profit'] or 0 for t in settled if t['profit'] is not None])
+    # 利润统计（使用筛选范围内的已结算订单）
+    profit_sum = sum([t['profit'] or 0 for t in settled if t['profit'] is not None])
+    
+    # 累计利润（全部已结算订单）
+    all_settled = conn.execute(
+        base_sql.replace("SELECT *", "SELECT *") + " AND status != 'pending'",
+        params
+    ).fetchall()
+    total_profit = sum([t['profit'] or 0 for t in all_settled if t['profit'] is not None])
     
     conn.close()
     
     return jsonify({
         'success': True,
         'data': {
-            'todayOrders': today_orders,
-            'todayLongCount': today_long,
-            'todayShortCount': today_short,
+            'todayOrders': total_orders,
+            'todayLongCount': long_count,
+            'todayShortCount': short_count,
             'winRate': f'{win_rate:.1f}%',
-            'todayProfit': round(today_profit, 2),
-            'totalProfit': round(total_profit, 2)
+            'winCount': win_count,
+            'loseCount': lose_count,
+            'settledCount': len(settled),
+            'todayProfit': round(profit_sum, 2),
+            'totalProfit': round(total_profit, 2),
+            'filterRange': {
+                'date': date,
+                'startDate': start_date,
+                'endDate': end_date
+            }
         }
     })
 
 @app.route('/api/trades/export', methods=['GET'])
 @require_auth
 def export_trades():
-    user = request.current_user
+    """导出交易记录为CSV或Excel"""
+    export_format = request.args.get('format', 'csv')
     period = request.args.get('period', 'all')
     direction = request.args.get('direction', 'all')
     date = request.args.get('date', '')
+    start_date = request.args.get('startDate', '')
+    end_date = request.args.get('endDate', '')
     
     conn = get_db_connection()
     
@@ -336,12 +390,95 @@ def export_trades():
     if date:
         sql += " AND date = ?"
         params.append(date)
+    if start_date:
+        sql += " AND date >= ?"
+        params.append(start_date)
+    if end_date:
+        sql += " AND date <= ?"
+        params.append(end_date)
     
     sql += " ORDER BY created_at DESC"
     trades = conn.execute(sql, params).fetchall()
     conn.close()
     
-    # 生成CSV
+    if export_format == 'xlsx' and EXCEL_AVAILABLE:
+        return export_to_excel(trades)
+    else:
+        return export_to_csv(trades)
+
+def export_to_excel(trades):
+    """导出为Excel格式"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "交易记录"
+    
+    # 样式定义
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    # 表头
+    headers = ['序号', '日期', '订单ID', '时间', '周期', '方向', '入场价', '结算价', '价差', 
+               '投入金额', '利润率', '利润', '累计利润', '结果']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = border
+    
+    # 数据行
+    for row_idx, t in enumerate(trades, 2):
+        ws.cell(row=row_idx, column=1, value=row_idx-1).border = border
+        ws.cell(row=row_idx, column=2, value=t['date']).border = border
+        ws.cell(row=row_idx, column=3, value=t['order_id']).border = border
+        ws.cell(row=row_idx, column=4, value=t['time']).border = border
+        ws.cell(row=row_idx, column=5, value=t['period']).border = border
+        
+        dir_cell = ws.cell(row=row_idx, column=6, value='做多' if t['direction']=='long' else '做空')
+        dir_cell.border = border
+        
+        ws.cell(row=row_idx, column=7, value=t['entry_price']).border = border
+        ws.cell(row=row_idx, column=8, value=t['exit_price'] or '').border = border
+        ws.cell(row=row_idx, column=9, value=t['price_diff'] or '').border = border
+        ws.cell(row=row_idx, column=10, value=t['amount']).border = border
+        ws.cell(row=row_idx, column=11, value=f"{t['profit_rate']*100:.0f}%").border = border
+        ws.cell(row=row_idx, column=12, value=t['profit'] if t['profit'] is not None else '').border = border
+        ws.cell(row=row_idx, column=13, value=t['cumulative_profit'] if t['cumulative_profit'] is not None else '').border = border
+        
+        status_map = {'win': '盈利', 'lose': '亏损', 'pending': '待结算'}
+        status_cell = ws.cell(row=row_idx, column=14, value=status_map.get(t['status'], t['status']))
+        status_cell.border = border
+        
+        # 利润为负时红色显示
+        if t['profit'] is not None and t['profit'] < 0:
+            ws.cell(row=row_idx, column=12).font = Font(color="EF4444")
+    
+    # 设置列宽
+    col_widths = [8, 12, 18, 10, 8, 8, 12, 12, 10, 10, 10, 12, 12, 10]
+    for i, width in enumerate(col_widths, 1):
+        ws.column_dimensions[chr(64+i) if i <= 26 else 'A'+chr(64+i-26)].width = width
+    
+    # 保存
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f'策奕量化交易记录_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename*=UTF-8\'\'{filename}'}
+    )
+
+def export_to_csv(trades):
+    """导出为CSV格式"""
     csv = "序号,日期,订单ID,时间,周期,方向,入场价,结算价,价差,投入金额,利润率,利润,累计利润,结果\n"
     for i, t in enumerate(trades):
         csv += f'{i+1},{t["date"]},{t["order_id"]},{t["time"]},{t["period"]},'
@@ -352,10 +489,11 @@ def export_trades():
         csv += f'{"盈利" if t["status"]=="win" else ("亏损" if t["status"]=="lose" else "待结算")}\n'
     
     filename = f'策奕量化交易记录_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-    return csv, 200, {
-        'Content-Type': 'text/csv; charset=utf-8-sig',
-        'Content-Disposition': f'attachment; filename={filename}'
-    }
+    return Response(
+        csv,
+        mimetype='text/csv; charset=utf-8-sig',
+        headers={'Content-Disposition': f'attachment; filename*=UTF-8\'\'{filename}'}
+    )
 
 # ============ Webhook API ============
 @app.route('/api/webhook/<period>/<direction>', methods=['POST', 'GET'])
@@ -494,11 +632,42 @@ def update_settings():
     return jsonify({'success': True})
 
 # ============ 用户管理API ============
+@app.route('/api/admin/stats', methods=['GET'])
+@require_admin
+def get_admin_stats():
+    """获取管理员统计数据"""
+    conn = get_db_connection()
+    
+    total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    today_new = conn.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now', 'localtime')").fetchone()[0]
+    active_users = conn.execute("SELECT COUNT(DISTINCT user_id) FROM trades").fetchone()[0]
+    total_trades = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    
+    conn.close()
+    
+    return jsonify({
+        'success': True,
+        'data': {
+            'totalUsers': total_users,
+            'activeUsers': active_users,
+            'totalTrades': total_trades,
+            'todayNewUsers': today_new
+        }
+    })
+
 @app.route('/api/admin/users', methods=['GET'])
 @require_admin
 def get_users():
     conn = get_db_connection()
-    users = conn.execute("SELECT id, username, role, created_at, is_active FROM users ORDER BY created_at DESC").fetchall()
+    users = conn.execute("""
+        SELECT u.id, u.username, u.role, u.created_at, u.is_active,
+               COUNT(t.id) as trade_count,
+               COALESCE(SUM(CASE WHEN t.status = 'win' THEN t.profit ELSE 0 END), 0) as total_profit
+        FROM users u
+        LEFT JOIN trades t ON u.id = t.user_id
+        GROUP BY u.id
+        ORDER BY u.created_at DESC
+    """).fetchall()
     conn.close()
     
     return jsonify({'success': True, 'data': [dict(u) for u in users]})
