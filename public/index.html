@@ -600,7 +600,7 @@
             <div class="controls-row">
                 <div class="control-group">
                     <label>筛选周期</label>
-                    <select id="periodFilter" onchange="loadTrades()">
+                    <select id="periodFilter" onchange="loadTrades(); loadStats();">
                         <option value="all">全部周期</option>
                         <option value="5m">5分钟</option>
                         <option value="10m">10分钟</option>
@@ -609,25 +609,52 @@
                 </div>
                 <div class="control-group">
                     <label>筛选方向</label>
-                    <select id="directionFilter" onchange="loadTrades()">
+                    <select id="directionFilter" onchange="loadTrades(); loadStats();">
                         <option value="all">全部方向</option>
                         <option value="long">做多</option>
                         <option value="short">做空</option>
                     </select>
                 </div>
                 <div class="control-group">
-                    <label>选择日期</label>
-                    <input type="date" id="dateFilter" onchange="loadTrades()">
+                    <label>日期筛选模式</label>
+                    <select id="dateMode" onchange="toggleDateMode()">
+                        <option value="single">单日筛选</option>
+                        <option value="range">时间段筛选</option>
+                    </select>
                 </div>
+            </div>
+            <div class="controls-row" id="singleDateRow">
+                <div class="control-group">
+                    <label>选择日期</label>
+                    <input type="date" id="dateFilter" onchange="loadTrades(); loadStats();">
+                </div>
+            </div>
+            <div class="controls-row" id="rangeDateRow" style="display: none;">
+                <div class="control-group">
+                    <label>开始日期</label>
+                    <input type="date" id="startDateFilter" onchange="loadTrades(); loadStats();">
+                </div>
+                <div class="control-group">
+                    <label>结束日期</label>
+                    <input type="date" id="endDateFilter" onchange="loadTrades(); loadStats();">
+                </div>
+            </div>
+            <div class="controls-row">
                 <div class="control-group">
                     <label>搜索订单ID</label>
                     <input type="text" id="searchFilter" placeholder="输入订单ID" onkeyup="loadTrades()">
                 </div>
                 <div class="control-group" id="userFilterGroup" style="display: none;">
                     <label>用户筛选</label>
-                    <select id="userFilter" onchange="loadTrades()">
+                    <select id="userFilter" onchange="loadTrades(); loadStats();">
                         <option value="all">全部用户</option>
                     </select>
+                </div>
+                <div class="control-group" style="margin-left: auto;">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-primary" onclick="exportExcel()" style="white-space: nowrap;">
+                        📥 导出Excel
+                    </button>
                 </div>
             </div>
         </div>
@@ -666,6 +693,24 @@
         
         <div class="card" id="adminPanel" style="display: none;">
             <div class="panel-title">👑 用户管理</div>
+            <div class="stats-summary" id="userStatsSummary" style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+                <div class="stat-mini">
+                    <span class="label">总用户数</span>
+                    <span class="value" id="totalUsers">0</span>
+                </div>
+                <div class="stat-mini">
+                    <span class="label">活跃用户</span>
+                    <span class="value" id="activeUsers">0</span>
+                </div>
+                <div class="stat-mini">
+                    <span class="label">总订单数</span>
+                    <span class="value" id="totalTrades">0</span>
+                </div>
+                <div class="stat-mini">
+                    <span class="label">今日新注册</span>
+                    <span class="value" id="todayNewUsers">0</span>
+                </div>
+            </div>
             <div class="user-list" id="userList"></div>
         </div>
     </div>
@@ -789,6 +834,7 @@
             if (currentUser.role === 'admin') {
                 document.getElementById('adminPanel').style.display = 'block';
                 document.getElementById('userFilterGroup').style.display = 'flex';
+                loadAdminStats();
                 loadUserList();
             }
             loadSettings();
@@ -895,6 +941,25 @@
         }
         
         // ============ 用户管理 ============
+        async function loadAdminStats() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/admin/stats`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('totalUsers').textContent = data.data.totalUsers;
+                    document.getElementById('activeUsers').textContent = data.data.activeUsers;
+                    document.getElementById('totalTrades').textContent = data.data.totalTrades;
+                    document.getElementById('todayNewUsers').textContent = data.data.todayNewUsers;
+                }
+            } catch (error) {
+                console.error('加载统计数据失败', error);
+            }
+        }
+        
         async function loadUserList() {
             try {
                 const token = localStorage.getItem('ceyi_token');
@@ -909,7 +974,12 @@
                         <div class="user-item">
                             <div class="user-item-info">
                                 <div class="user-item-name">${user.username} ${user.role === 'admin' ? '👑' : ''}</div>
-                                <div class="user-item-meta">角色: ${user.role === 'admin' ? '管理员' : '用户'} | 注册: ${new Date(user.created_at).toLocaleDateString('zh-CN')}</div>
+                                <div class="user-item-meta">
+                                    角色: ${user.role === 'admin' ? '管理员' : '用户'} | 
+                                    订单: ${user.trade_count || 0} | 
+                                    盈利: ¥${(user.total_profit || 0).toFixed(2)} | 
+                                    注册: ${new Date(user.created_at).toLocaleDateString('zh-CN')}
+                                </div>
                             </div>
                             <div class="user-item-actions">
                                 ${user.username !== 'admin' ? `
@@ -958,12 +1028,23 @@
         }
         
         // ============ 数据加载 ============
+        function toggleDateMode() {
+            const mode = document.getElementById('dateMode').value;
+            document.getElementById('singleDateRow').style.display = mode === 'single' ? 'flex' : 'none';
+            document.getElementById('rangeDateRow').style.display = mode === 'range' ? 'flex' : 'none';
+            loadTrades();
+            loadStats();
+        }
+        
         async function loadTrades() {
             try {
                 const token = localStorage.getItem('ceyi_token');
                 const period = document.getElementById('periodFilter').value;
                 const direction = document.getElementById('directionFilter').value;
-                const date = document.getElementById('dateFilter').value;
+                const dateMode = document.getElementById('dateMode').value;
+                const date = dateMode === 'single' ? document.getElementById('dateFilter').value : '';
+                const startDate = dateMode === 'range' ? document.getElementById('startDateFilter').value : '';
+                const endDate = dateMode === 'range' ? document.getElementById('endDateFilter').value : '';
                 const search = document.getElementById('searchFilter').value;
                 const userFilter = document.getElementById('userFilter').value;
                 
@@ -971,6 +1052,8 @@
                 if (period !== 'all') params.append('period', period);
                 if (direction !== 'all') params.append('direction', direction);
                 if (date) params.append('date', date);
+                if (startDate) params.append('startDate', startDate);
+                if (endDate) params.append('endDate', endDate);
                 if (search) params.append('search', search);
                 if (userFilter !== 'all') params.append('userId', userFilter);
                 
@@ -992,7 +1075,17 @@
         async function loadStats() {
             try {
                 const token = localStorage.getItem('ceyi_token');
-                const response = await fetch(`${API_BASE}/api/trades/stats`, {
+                const dateMode = document.getElementById('dateMode').value;
+                const date = dateMode === 'single' ? document.getElementById('dateFilter').value : '';
+                const startDate = dateMode === 'range' ? document.getElementById('startDateFilter').value : '';
+                const endDate = dateMode === 'range' ? document.getElementById('endDateFilter').value : '';
+                
+                const params = new URLSearchParams();
+                if (date) params.append('date', date);
+                if (startDate) params.append('startDate', startDate);
+                if (endDate) params.append('endDate', endDate);
+                
+                const response = await fetch(`${API_BASE}/api/trades/stats?${params}`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 const data = await response.json();
@@ -1174,12 +1267,17 @@
         function exportExcel() {
             const period = document.getElementById('periodFilter').value;
             const direction = document.getElementById('directionFilter').value;
-            const date = document.getElementById('dateFilter').value;
+            const dateMode = document.getElementById('dateMode').value;
+            const date = dateMode === 'single' ? document.getElementById('dateFilter').value : '';
+            const startDate = dateMode === 'range' ? document.getElementById('startDateFilter').value : '';
+            const endDate = dateMode === 'range' ? document.getElementById('endDateFilter').value : '';
             
-            const params = new URLSearchParams();
+            const params = new URLSearchParams({ format: 'xlsx' });
             if (period !== 'all') params.append('period', period);
             if (direction !== 'all') params.append('direction', direction);
             if (date) params.append('date', date);
+            if (startDate) params.append('startDate', startDate);
+            if (endDate) params.append('endDate', endDate);
             
             window.location.href = `${API_BASE}/api/trades/export?${params}`;
         }
