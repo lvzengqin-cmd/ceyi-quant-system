@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>策奕量化 - 交易记录系统</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --primary-dark: #4338CA;
+            --success: #10B981;
+            --danger: #EF4444;
+            --warning: #F59E0B;
+            --bg: #F8FAFC;
+            --card-bg: #FFFFFF;
+            --text: #1E293B;
+            --text-muted: #64748B;
+            --border: #E2E8F0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            padding: 24px;
+            border-radius: 16px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        .header h1 { font-size: 28px; font-weight: 700; }
+        .header-info { display: flex; align-items: center; gap: 16px; }
+        .header-info span { opacity: 0.9; }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: white; color: var(--primary); }
+        .btn-primary:hover { background: #F1F5F9; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        
+        /* Auth Page */
+        .auth-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 80vh;
+        }
+        .auth-card {
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 400px;
+        }
+        .auth-card h2 { text-align: center; margin-bottom: 24px; color: var(--primary); }
+        .auth-tabs { display: flex; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
+        .auth-tab {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            cursor: pointer;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .auth-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .auth-form { display: none; }
+        .auth-form.active { display: block; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: var(--text); }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus { outline: none; border-color: var(--primary); }
+        .form-group .btn { width: 100%; margin-top: 8px; }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        .stat-card .label { color: var(--text-muted); font-size: 13px; margin-bottom: 4px; }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: var(--text); }
+        .stat-card .value.positive { color: var(--success); }
+        .stat-card .value.negative { color: var(--danger); }
+        
+        /* Filter Bar */
+        .filter-bar {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+        .filter-bar select, .filter-bar input {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .filter-bar label { font-size: 13px; color: var(--text-muted); }
+        
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            overflow: hidden;
+        }
+        .panel-title {
+            padding: 16px 20px;
+            font-size: 16px;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        /* Table */
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: #F8FAFC; font-weight: 600; font-size: 12px; color: var(--text-muted); text-transform: uppercase; }
+        tr:hover { background: #F8FAFC; }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .badge-long { background: #DCFCE7; color: #166534; }
+        .badge-short { background: #FEE2E2; color: #991B1B; }
+        .badge-win { background: #DCFCE7; color: #166534; }
+        .badge-lose { background: #FEE2E2; color: #991B1B; }
+        .badge-pending { background: #FEF3C7; color: #92400E; }
+        .profit-positive { color: var(--success); font-weight: 600; }
+        .profit-negative { color: var(--danger); font-weight: 600; }
+        
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--text);
+            color: white;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+        .toast.error { background: var(--danger); }
+        @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        
+        /* Pagination */
+        .pagination { display: flex; justify-content: center; gap: 8px; padding: 16px; }
+        .pagination button {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .pagination button.active { background: var(--primary); color: white; border-color: var(--primary); }
+        
+        /* User List */
+        .user-list { padding: 16px; }
+        .user-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .user-item:last-child { border-bottom: none; }
+        .user-item-name { font-weight: 600; }
+        .user-item-meta { font-size: 12px; color: var(--text-muted); }
+        .user-item-actions { display: flex; gap: 8px; }
+        
+        .loading { display: inline-block; width: 16px; height: 16px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+        .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+        .stat-mini { background: #F1F5F9; padding: 12px 16px; border-radius: 8px; text-align: center; }
+        .stat-mini .label { font-size: 12px; color: var(--text-muted); }
+        .stat-mini .value { font-size: 20px; font-weight: 700; color: var(--text); }
+        
+        @media (max-width: 768px) {
+            .header { flex-direction: column; text-align: center; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .filter-bar { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Auth Page -->
+    <div id="authPage" class="container auth-container">
+        <div class="auth-card">
+            <h2>🔷 策奕量化</h2>
+            <div class="auth-tabs">
+                <div class="auth-tab active" onclick="switchAuthTab('login')">登录</div>
+                <div class="auth-tab" onclick="switchAuthTab('register')">注册</div>
+            </div>
+            <form id="loginForm" class="auth-form active" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="loginUsername" required placeholder="请输入用户名">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="loginPassword" required placeholder="请输入密码">
+                </div>
+                <button type="submit" class="btn btn-primary" id="loginBtn">登录</button>
+            </form>
+            <form id="registerForm" class="auth-form" onsubmit="handleRegister(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="regUsername" required placeholder="请输入用户名">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="regPassword" required placeholder="请输入密码">
+                </div>
+                <div class="form-group">
+                    <label>确认密码</label>
+                    <input type="password" id="regPassword2" required placeholder="请再次输入密码">
+                </div>
+                <button type="submit" class="btn btn-primary" id="registerBtn">注册</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Main Page -->
+    <div id="mainPage" style="display: none;">
+        <div class="container">
+            <div class="header">
+                <div>
+                    <h1>🔷 策奕量化</h1>
+                    <div id="usernameDisplay" style="font-size: 14px; opacity: 0.9;"></div>
+                    <span id="roleDisplay" style="font-size: 12px;"></span>
+                </div>
+                <div class="header-info">
+                    <span id="serverStatus">🟢 已连接</span>
+                    <button class="btn btn-danger" onclick="logout()">退出</button>
+                </div>
+            </div>
+            
+            <!-- Stats -->
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="label">总订单数</div>
+                    <div class="value" id="totalOrders">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">已结算订单</div>
+                    <div class="value" id="settledOrders">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">胜率</div>
+                    <div class="value" id="winRate">0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">累计利润</div>
+                    <div class="value" id="totalProfit">¥0.00</div>
+                </div>
+               <div class="stat-card">
+                    <div class="label">盈利订单</div>
+                    <div class="value positive" id="winOrders">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">亏损订单</div>
+                    <div class="value negative" id="loseOrders">0</div>
+                </div>
+            </div>
+            
+            <!-- Filter -->
+            <div class="filter-bar">
+                <label>周期：</label>
+                <select id="periodFilter" onchange="loadTrades()">
+                    <option value="all">全部</option>
+                    <option value="5m">5分钟</option>
+                    <option value="10m">10分钟</option>
+                    <option value="30m">30分钟</option>
+                </select>
+                <label>方向：</label>
+                <select id="directionFilter" onchange="loadTrades()">
+                    <option value="all">全部</option>
+                    <option value="long">做多</option>
+                    <option value="short">做空</option>
+                </select>
+                <label>日期：</label>
+                <select id="dateMode" onchange="toggleDateMode()">
+                    <option value="single">单日筛选</option>
+                    <option value="range">时间段</option>
+                </select>
+                <input type="date" id="singleDate" onchange="loadTrades()">
+                <input type="date" id="startDate" style="display:none" onchange="loadTrades()">
+                <label id="endDateLabel" style="display:none">至</label>
+                <input type="date" id="endDate" style="display:none" onchange="loadTrades()">
+                <button class="btn btn-primary btn-sm" onclick="exportData()">📥导出Excel</button>
+            </div>
+            
+            <!-- Webhook Info -->
+            <div class="card" style="margin-bottom: 20px;">
+                <div class="panel-title">🔗 Webhook 端点</div>
+                <div style="padding: 16px 20px; font-size: 13px; color: var(--text-muted);">
+                    <div style="margin-bottom: 8px;">
+                        <strong>5分钟周期：</strong>
+                        <code id="webhook5m">POST /api/webhook/5m/long | /short</code>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <strong>10分钟周期：</strong>
+                        <code id="webhook10m">POST /api/webhook/10m/long | /short</code>
+                    </div>
+                    <div>
+                        <strong>30分钟周期：</strong>
+                        <code id="webhook30m">POST /api/webhook/30m/long | /short</code>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Trades Table -->
+            <div class="card">
+                <div class="panel-title">
+                    📋 交易记录
+                    <span id="recordCount" style="font-size: 13px; color: var(--text-muted);">共 0 条</span>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>订单ID</th>
+                                <th>日期</th>
+                                <th>时间</th>
+                                <th>周期</th>
+                                <th>方向</th>
+                                <th>入场价</th>
+                                <th>结算价</th>
+                                <th>利润率</th>
+                                <th>利润</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesBody"></tbody>
+                    </table>
+                </div>
+           </div>
+            <div class="empty-state" id="emptyState" style="display: none;">
+                <div class="icon">📋</div>
+                <h3>暂无交易记录</h3>
+                <p>Webhook端点接收到信号后将自动记录</p>
+            </div>
+            <div class="pagination" id="pagination"></div>
+            
+            <!-- Admin Panel -->
+            <div class="card" id="adminPanel" style="display: none; margin-top: 20px;">
+                <div class="panel-title">👑 用户管理</div>
+                <div class="stats-summary" id="userStatsSummary" style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; padding: 16px;">
+                    <div class="stat-mini">
+                        <span class="label">总用户数</span>
+                        <span class="value" id="totalUsers">0</span>
+                    </div>
+                    <div class="stat-mini">
+                        <span class="label">活跃用户</span>
+                        <span class="value" id="activeUsers">0</span>
+                    </div>
+                    <div class="stat-mini">
+                        <span class="label">总订单数</span>
+                        <span class="value" id="totalTrades">0</span>
+                    </div>
+                    <div class="stat-mini">
+                        <span class="label">今日新注册</span>
+                        <span class="value" id="todayNewUsers">0</span>
+                    </div>
+                </div>
+                <div class="user-list" id="userList"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="toast" class="toast" style="display: none;"></div>
+    
+    <script>
+        // API配置 - Railway后端
+        const API_BASE = "https://web-production-79218.up.railway.app";
+        
+        let currentUser = null;
+        let socket = null;
+        let currentPage = 1;
+        let totalPages = 1;
+        
+        //初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('ceyi_token');
+            const user = localStorage.getItem('ceyi_user');
+            if (token && user) {
+                currentUser = JSON.parse(user);
+                showMainPage();
+                connectSocket();
+            } else {
+                showAuthPage();
+            }
+            updateWebhookLinks();
+            setTodayDate();
+        });
+        
+        function setTodayDate() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('singleDate').value = today;
+            document.getElementById('singleDate').max = today;
+            document.getElementById('startDate').value = today;
+            document.getElementById('endDate').value = today;
+        }
+        
+        function updateWebhookLinks() {
+            const base = API_BASE;
+            document.getElementById('webhook5m').textContent = `${base}/api/webhook/5m/long | /short`;
+            document.getElementById('webhook10m').textContent = `${base}/api/webhook/10m/long | /short`;
+            document.getElementById('webhook30m').textContent = `${base}/api/webhook/30m/long | /short`;
+        }
+        
+        function connectSocket() {
+            try {
+                socket = io(API_BASE, { transports: ['websocket', 'polling'] });
+                socket.on('connect', () => console.log('Socket connected'));
+                socket.on('new_trade', () => loadTrades());
+                socket.on('trade_settled', () => { loadTrades(); loadStats(); });
+                socket.on('disconnect', () => document.getElementById('serverStatus').textContent = '🟠 已断开');
+            } catch (e) {
+                console.log('Socket连接失败');
+            }
+        }
+        
+        function showAuthPage() {
+            document.getElementById('authPage').style.display = 'flex';
+            document.getElementById('mainPage').style.display = 'none';
+        }
+        
+        function showMainPage() {
+            document.getElementById('authPage').style.display = 'none';
+            document.getElementById('mainPage').style.display = 'block';
+            document.getElementById('usernameDisplay').textContent = currentUser.username;
+            document.getElementById('roleDisplay').textContent = currentUser.role === 'admin' ? '(管理员)' : '(用户)';
+            if (currentUser.role === 'admin') {
+                document.getElementById('adminPanel').style.display = 'block';
+                loadAdminStats();
+                loadUserList();
+            }
+            loadSettings();
+            loadTrades();
+            loadStats();
+        }
+        
+        function switchAuthTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+            document.querySelector(`.auth-tab:${tab === 'login' ? 'first' : 'last'}-child`).classList.add('active');
+            document.getElementById(tab + 'Form').classList.add('active');
+        }
+        
+        async function handleLogin(event) {
+            event.preventDefault();
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 登录中...';
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    localStorage.setItem('ceyi_token', data.token);
+                    localStorage.setItem('ceyi_user', JSON.stringify(data.user));
+                    currentUser = data.user;
+                    showMainPage();
+                    showToast('登录成功');
+                } else {
+                    showToast(data.error || '登录失败', true);
+                }
+            } catch (error) {
+                showToast('服务器连接失败', true);
+            }
+            btn.disabled = false;
+            btn.textContent = '登录';
+        }
+        
+        async function handleRegister(event) {
+            event.preventDefault();
+            const btn = document.getElementById('registerBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 注册中...';
+            const username = document.getElementById('regUsername').value;
+            const password = document.getElementById('regPassword').value;
+            const password2 = document.getElementById('regPassword2').value;
+            if (password !== password2) {
+                showToast('两次密码输入不一致', true);
+                btn.disabled = false;
+                btn.textContent = '注册';
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/auth/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    localStorage.setItem('ceyi_token', data.token);
+                    localStorage.setItem('ceyi_user', JSON.stringify(data.user));
+                    currentUser = data.user;
+                    showMainPage();
+                    showToast('注册成功');
+                } else {
+                    showToast(data.error || '注册失败', true);
+                }
+            } catch (error) {
+                showToast('服务器连接失败', true);
+            }
+            btn.disabled = false;
+            btn.textContent = '注册';
+        }
+        
+        function logout() {
+            localStorage.removeItem('ceyi_token');
+            localStorage.removeItem('ceyi_user');
+            currentUser = null;
+            if (socket) socket.disconnect();
+            showAuthPage();
+            showToast('已退出登录');
+        }
+        
+        // ============ 用户管理 ============
+        async function loadAdminStats() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/admin/stats`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('totalUsers').textContent = data.data.totalUsers;
+                    document.getElementById('activeUsers').textContent = data.data.activeUsers;
+                    document.getElementById('totalTrades').textContent = data.data.totalTrades;
+                    document.getElementById('todayNewUsers').textContent = data.data.todayNewUsers;
+                }
+            } catch (error) {
+                console.error('加载统计数据失败', error);
+            }
+        }
+        
+        async function loadUserList() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/admin/users`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    const userList = document.getElementById('userList');
+                    userList.innerHTML = data.data.map(user => `
+                        <div class="user-item">
+                            <div class="user-item-info">
+                                <div class="user-item-name">${user.username} ${user.role === 'admin' ? '👑' : ''}</div>
+                                <div class="user-item-meta">
+                                    角色: ${user.role === 'admin' ? '管理员' : '用户'} | 
+                                    订单: ${user.trade_count || 0} | 
+                                    盈利: ¥${(user.total_profit || 0).toFixed(2)}
+                                </div>
+                            </div>
+                            <div class="user-item-actions">
+                                ${user.username !== 'admin' ? `
+                                    <button class="btn btn-sm ${user.is_active ? 'btn-danger' : 'btn-primary'}" onclick="toggleUser(${user.id})">
+                                        ${user.is_active ? '禁用' : '启用'}
+                                    </button>
+                                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">删除</button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('加载用户列表失败:', error);
+            }
+        }
+        
+        async function toggleUser(userId) {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/admin/users/${userId}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    loadUserList();
+                    loadAdminStats();
+                }
+            } catch (error) {
+                showToast('操作失败', true);
+            }
+        }
+        
+        async function deleteUser(userId) {
+            if (!confirm('确定要删除此用户吗？')) return;
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/admin/users/${userId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    loadUserList();
+                    loadAdminStats();
+                    showToast('用户已删除');
+                }
+            } catch (error) {
+                showToast('操作失败', true);
+            }
+        }
+        
+        // ============ 交易数据 ============
+        async function loadTrades() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const period = document.getElementById('periodFilter').value;
+                const direction = document.getElementById('directionFilter').value;
+                const dateMode = document.getElementById('dateMode').value;
+                let date = null, startDate = null, endDate = null;
+                if (dateMode === 'single') {
+                    date = document.getElementById('singleDate').value;
+                } else {
+                    startDate = document.getElementById('startDate').value;
+                    endDate = document.getElementById('endDate').value;
+                }
+                const params = new URLSearchParams({ page: currentPage });
+                if (period !== 'all') params.append('period', period);
+                if (direction !== 'all') params.append('direction', direction);
+                if (date) params.append('date', date);
+                if (startDate) params.append('startDate', startDate);
+                if (endDate) params.append('endDate', endDate);
+                const response = await fetch(`${API_BASE}/api/trades?${params}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                renderTrades(data.trades || []);
+                renderPagination(data.totalPages || 1);
+            } catch (error) {
+                console.error('加载交易记录失败', error);
+            }
+        }
+        
+        function renderTrades(trades) {
+            const tbody = document.getElementById('tradesBody');
+            const emptyState = document.getElementById('emptyState');
+            const recordCount = document.getElementById('recordCount');
+            if (trades.length === 0) {
+                tbody.innerHTML = '';
+                emptyState.style.display = 'block';
+                recordCount.textContent = '共 0 条';
+                return;
+            }
+            emptyState.style.display = 'none';
+            recordCount.textContent = `共 ${trades.length} 条`;
+            tbody.innerHTML = trades.map(t => `
+                <tr>
+                    <td><code style="font-size: 12px;">${t.order_id}</code></td>
+                    <td>${t.date}</td>
+                    <td>${t.time}</td>
+                    <td>${t.period}</td>
+                    <td><span class="badge badge-${t.direction}">${t.direction === 'long' ? '做多' : '做空'}</span></td>
+                    <td>$${Number(t.entry_price).toLocaleString()}</td>
+                    <td>${t.exit_price ? '$' + Number(t.exit_price).toLocaleString() : '-'}</td>
+                    <td>${(t.profit_rate * 100).toFixed(0)}%</td>
+                    <td class="${t.profit !== null ? (t.profit >= 0 ? 'profit-positive' : 'profit-negative') : ''}">
+                        ${t.profit !== null ? '¥' + t.profit.toFixed(2) : '-'}
+                    </td>
+                    <td><span class="badge badge-${t.status}">${t.status === 'win' ? '盈利' : t.status === 'lose' ? '亏损' : '待结算'}</span></td>
+                </tr>
+            `).join('');
+        }
+        
+        function renderPagination(pages) {
+            totalPages = pages;
+            const pagination = document.getElementById('pagination');
+            if (pages <= 1) { pagination.innerHTML = ''; return; }
+            let html = '';
+            for (let i = 1; i <= pages; i++) {
+                html += `<button class="${i === currentPage ? 'active' : ''}" onclick="goPage(${i})">${i}</button>`;
+            }
+            pagination.innerHTML = html;
+        }
+        
+        function goPage(page) {
+            currentPage = page;
+            loadTrades();
+        }
+        
+        // ============ 统计数据 ============
+        async function loadStats() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/trades/stats`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+                document.getElementById('totalOrders').textContent = data.totalOrders || 0;
+                document.getElementById('settledOrders').textContent = data.settledOrders || 0;
+                document.getElementById('winRate').textContent = (data.winRate || 0) + '%';
+                document.getElementById('totalProfit').textContent = '¥' + (data.totalProfit || 0).toFixed(2);
+                document.getElementById('winOrders').textContent = data.winOrders || 0;
+                document.getElementById('loseOrders').textContent = data.loseOrders || 0;
+            } catch (error) {
+                console.error('加载统计数据失败', error);
+            }
+        }
+        
+        // ============ 设置 ============
+        async function loadSettings() {
+            try {
+                const token = localStorage.getItem('ceyi_token');
+                const response = await fetch(`${API_BASE}/api/settings`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await response.json();
+            } catch (error) {
+                console.error('加载设置失败', error);
+            }
+        }
+        
+        // ============ 导出 ============
+        async function exportData() {
+            const token = localStorage.getItem('ceyi_token');
+            const period = document.getElementById('periodFilter').value;
+            const direction = document.getElementById('directionFilter').value;
+            const dateMode = document.getElementById('dateMode').value;
+            let date = null, startDate = null, endDate = null;
+            if (dateMode === 'single') {
+                date = document.getElementById('singleDate').value;
+            } else {
+                startDate = document.getElementById('startDate').value;
+                endDate = document.getElementById('endDate').value;
+            }
+            const params = new URLSearchParams({ format: 'xlsx' });
+            if (period !== 'all') params.append('period', period);
+            if (direction !== 'all') params.append('direction', direction);
+            if (date) params.append('date', date);
+            if (startDate) params.append('startDate', startDate);
+            if (endDate) params.append('endDate', endDate);
+            window.open(`${API_BASE}/api/trades/export?${params}`, '_blank');
+        }
+        
+        function toggleDateMode() {
+            const mode = document.getElementById('dateMode').value;
+            document.getElementById('singleDate').style.display = mode === 'single' ? 'block' : 'none';
+            document.getElementById('startDate').style.display = mode === 'range' ? 'block' : 'none';
+            document.getElementById('endDateLabel').style.display = mode === 'range' ? 'inline' : 'none';
+            document.getElementById('endDate').style.display = mode === 'range' ? 'block' : 'none';
+        }
+        
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 3000);
+        }
+    </script>
+</body>
+</html>
